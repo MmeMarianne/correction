@@ -6,17 +6,18 @@
     <title>Plateforme Enseignant et Élève - Outil d'Autocorrection</title>
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- Intégration Firebase -->
+    <!-- Intégration Firebase CORRIGÉE -->
     <script type="module">
         // Import the functions you need from the SDKs you need
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-analytics.js";
-        import { getDatabase, ref, set, get, child, push, update, remove } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
+        import { getDatabase, ref, set, get, child } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-database.js";
 
-        // Your web app's Firebase configuration
+        // Your web app's Firebase configuration - COMPLÈTE
         const firebaseConfig = {
             apiKey: "AIzaSyBQ2x6iR0yeQE0mGvWKnEe4H01fhhr91JM",
             authDomain: "ateliers-af899.firebaseapp.com",
+            databaseURL: "https://ateliers-af899-default-rtdb.firebaseio.com",
             projectId: "ateliers-af899",
             storageBucket: "ateliers-af899.firebasestorage.app",
             messagingSenderId: "297753369500",
@@ -25,20 +26,40 @@
         };
 
         // Initialize Firebase
-        const app = initializeApp(firebaseConfig);
-        const analytics = getAnalytics(app);
-        const database = getDatabase(app);
+        try {
+            const app = initializeApp(firebaseConfig);
+            const analytics = getAnalytics(app);
+            const database = getDatabase(app);
 
-        // Rendre Firebase accessible globalement
-        window.firebaseApp = app;
-        window.firebaseDatabase = database;
-        window.firebaseRef = ref;
-        window.firebaseSet = set;
-        window.firebaseGet = get;
-        window.firebaseChild = child;
-        window.firebasePush = push;
-        window.firebaseUpdate = update;
-        window.firebaseRemove = remove;
+            console.log('Firebase initialisé avec succès');
+            
+            // Rendre Firebase accessible globalement
+            window.firebaseApp = app;
+            window.firebaseDatabase = database;
+            window.firebaseRef = ref;
+            window.firebaseSet = set;
+            window.firebaseGet = get;
+            window.firebaseChild = child;
+            window.firebaseInitialized = true;
+            
+            // Mettre à jour le statut
+            updateFirebaseStatus('Firebase: Connecté', true);
+            
+        } catch (error) {
+            console.error('Erreur lors de l\'initialisation de Firebase:', error);
+            window.firebaseInitialized = false;
+            updateFirebaseStatus('Firebase: Erreur d\'initialisation', false);
+        }
+
+        function updateFirebaseStatus(message, isConnected) {
+            const statusElement = document.getElementById('firebase-status');
+            if (statusElement) {
+                statusElement.textContent = message;
+                statusElement.className = isConnected ? 
+                    'firebase-status firebase-connected' : 
+                    'firebase-status firebase-error';
+            }
+        }
     </script>
 
     <style>
@@ -167,12 +188,16 @@
             background-color: #ef4444;
             color: white;
         }
+        .firebase-error {
+            background-color: #f59e0b;
+            color: white;
+        }
     </style>
 </head>
 <body>
     <!-- Indicateur de statut Firebase -->
-    <div id="firebase-status" class="firebase-status firebase-disconnected">
-        Firebase: Déconnecté
+    <div id="firebase-status" class="firebase-status firebase-error">
+        Firebase: Chargement...
     </div>
 
     <!-- Barre de navigation pour switcher entre les plateformes -->
@@ -576,55 +601,64 @@
             let currentEditingClass = null;
             let questionTimeouts = {};
             
-            // Firebase Functions
+            // Firebase Functions - CORRIGÉES
             async function saveToFirebase(path, data) {
-                try {
-                    await window.firebaseSet(window.firebaseRef(window.firebaseDatabase, path), data);
-                    updateFirebaseStatus(true);
-                    return true;
-                } catch (error) {
-                    console.error('Erreur Firebase:', error);
-                    updateFirebaseStatus(false);
+                // Sauvegarde locale par défaut
+                localStorage.setItem(path, JSON.stringify(data));
+                
+                // Tentative de sauvegarde Firebase
+                if (window.firebaseInitialized) {
+                    try {
+                        await window.firebaseSet(window.firebaseRef(window.firebaseDatabase, path), data);
+                        console.log('✅ Données sauvegardées sur Firebase');
+                        updateFirebaseStatus('Firebase: Connecté', true);
+                        return true;
+                    } catch (error) {
+                        console.warn('❌ Erreur Firebase, utilisation du stockage local:', error);
+                        updateFirebaseStatus('Firebase: Erreur de sauvegarde', false);
+                        return false;
+                    }
+                } else {
+                    console.warn('Firebase non initialisé, utilisation du stockage local');
                     return false;
                 }
             }
             
             async function loadFromFirebase(path) {
-                try {
-                    const snapshot = await window.firebaseGet(window.firebaseChild(window.firebaseRef(window.firebaseDatabase), path));
-                    updateFirebaseStatus(true);
-                    return snapshot.exists() ? snapshot.val() : null;
-                } catch (error) {
-                    console.error('Erreur Firebase:', error);
-                    updateFirebaseStatus(false);
-                    return null;
+                // D'abord essayer Firebase
+                if (window.firebaseInitialized) {
+                    try {
+                        const snapshot = await window.firebaseGet(
+                            window.firebaseChild(window.firebaseRef(window.firebaseDatabase), path)
+                        );
+                        if (snapshot.exists()) {
+                            console.log('✅ Données chargées depuis Firebase');
+                            updateFirebaseStatus('Firebase: Connecté', true);
+                            return snapshot.val();
+                        }
+                    } catch (error) {
+                        console.warn('❌ Erreur Firebase, utilisation du stockage local:', error);
+                        updateFirebaseStatus('Firebase: Erreur de chargement', false);
+                    }
                 }
-            }
-            
-            function updateFirebaseStatus(connected) {
-                if (connected) {
-                    firebaseStatus.textContent = 'Firebase: Connecté';
-                    firebaseStatus.className = 'firebase-status firebase-connected';
-                } else {
-                    firebaseStatus.textContent = 'Firebase: Déconnecté';
-                    firebaseStatus.className = 'firebase-status firebase-disconnected';
+                
+                // Fallback au localStorage
+                const localData = localStorage.getItem(path);
+                if (localData) {
+                    console.log('📁 Données chargées depuis le stockage local');
+                    return JSON.parse(localData);
                 }
+                return null;
             }
-            
-            async function loadData() {
-                // Charger les classes depuis Firebase
-                const classesData = await loadFromFirebase('classes');
-                classes = classesData ? Object.values(classesData) : [];
-                
-                // Charger les activités depuis Firebase
-                const activitiesData = await loadFromFirebase('activities');
-                activities = activitiesData ? Object.values(activitiesData) : [];
-                
-                // Charger les résultats depuis Firebase
-                const resultsData = await loadFromFirebase('results');
-                results = resultsData ? Object.values(resultsData) : [];
-                
-                console.log('Données chargées depuis Firebase:', { classes, activities, results });
+
+            function updateFirebaseStatus(message, isConnected) {
+                const statusElement = document.getElementById('firebase-status');
+                if (statusElement) {
+                    statusElement.textContent = message;
+                    statusElement.className = isConnected ? 
+                        'firebase-status firebase-connected' : 
+                        'firebase-status firebase-error';
+                }
             }
             
             async function saveClasses() {
@@ -653,15 +687,22 @@
             
             // Initialize the app
             async function init() {
+                console.log('🚀 Initialisation de l\'application...');
+                
                 // Attendre que Firebase soit chargé
-                await new Promise(resolve => {
-                    const checkFirebase = setInterval(() => {
-                        if (window.firebaseDatabase) {
-                            clearInterval(checkFirebase);
-                            resolve();
-                        }
-                    }, 100);
-                });
+                let firebaseLoaded = false;
+                for (let i = 0; i < 50; i++) {
+                    if (window.firebaseInitialized !== undefined) {
+                        firebaseLoaded = true;
+                        break;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                
+                if (!firebaseLoaded) {
+                    console.warn('Firebase ne s\'est pas initialisé dans le délai imparti');
+                    updateFirebaseStatus('Firebase: Timeout', false);
+                }
                 
                 await loadData();
                 renderClassesList();
@@ -672,6 +713,24 @@
                 
                 // Afficher la plateforme élève par défaut
                 showStudentPlatform();
+                
+                console.log('✅ Application initialisée');
+            }
+            
+            async function loadData() {
+                // Charger les classes depuis Firebase
+                const classesData = await loadFromFirebase('classes');
+                classes = classesData ? Object.values(classesData) : [];
+                
+                // Charger les activités depuis Firebase
+                const activitiesData = await loadFromFirebase('activities');
+                activities = activitiesData ? Object.values(activitiesData) : [];
+                
+                // Charger les résultats depuis Firebase
+                const resultsData = await loadFromFirebase('results');
+                results = resultsData ? Object.values(resultsData) : [];
+                
+                console.log('Données chargées:', { classes, activities, results });
             }
             
             // Show teacher platform
