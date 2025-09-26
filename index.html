@@ -740,9 +740,12 @@
                 console.log('Données chargées:', { classes: classes, activities: activities, results: results, studentAnswers: studentAnswers });
             }
             
-            // Fonction pour charger les activités de l'élève
+            // Fonction pour charger les activités de l'élève - CORRIGÉE
             function loadStudentActivities() {
                 console.log('Chargement des activités pour:', currentStudent);
+                console.log('Classes disponibles:', classes);
+                console.log('Activités disponibles:', activities);
+                
                 activitiesContainer.innerHTML = '';
                 
                 if (!currentStudent || !currentStudent.classId) {
@@ -751,14 +754,23 @@
                     return;
                 }
                 
+                // CORRECTION : Convertir le classId en nombre pour la comparaison
+                const studentClassId = parseInt(currentStudent.classId);
+                
                 // Filtrer les activités pour ne montrer que celles assignées à la classe de l'élève
                 const studentActivitiesList = activities.filter(function(activity) {
                     if (!activity.classes) {
                         console.log('Activité sans classes:', activity.name);
                         return false;
                     }
-                    const isAssigned = activity.classes.includes(currentStudent.classId);
-                    console.log('Activité:', activity.name, 'assignée à la classe:', isAssigned);
+                    
+                    // CORRECTION : Convertir les IDs de classe en nombres pour la comparaison
+                    const assignedClasses = activity.classes.map(function(classId) {
+                        return parseInt(classId);
+                    });
+                    
+                    const isAssigned = assignedClasses.includes(studentClassId);
+                    console.log('Activité:', activity.name, 'assignée à la classe', studentClassId, ':', isAssigned);
                     return isAssigned;
                 });
                 
