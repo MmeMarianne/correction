@@ -213,6 +213,10 @@
             font-weight: bold;
             margin-right: 8px;
         }
+        .answered-correctly {
+            border-left: 4px solid #10b981;
+            background-color: #f0fdf4;
+        }
     </style>
 </head>
 <body>
@@ -610,7 +614,8 @@
             let currentEditingActivity = null;
             let currentEditingClass = null;
             let questionTimeouts = {};
-            let questionStates = {}; // Nouveau : pour stocker l'état de chaque question
+            let questionStates = {};
+            let lastAnswerTimestamps = {}; // Nouveau : pour stocker les timestamps des réponses incorrectes
             
             // Firebase Functions
             async function saveToFirebase(path, data) {
@@ -700,6 +705,10 @@
                 return await saveToFirebase('studentAnswers', studentAnswers);
             }
             
+            async function saveLastAnswerTimestamps() {
+                return await saveToFirebase('lastAnswerTimestamps', lastAnswerTimestamps);
+            }
+            
             // Initialize the app
             async function init() {
                 console.log('Initialisation de l\'application...');
@@ -751,14 +760,22 @@
                 const answersData = await loadFromFirebase('studentAnswers');
                 studentAnswers = answersData || {};
                 
-                console.log('Données chargées:', { classes: classes, activities: activities, results: results, studentAnswers: studentAnswers });
+                // Charger les timestamps des réponses
+                const timestampsData = await loadFromFirebase('lastAnswerTimestamps');
+                lastAnswerTimestamps = timestampsData || {};
+                
+                console.log('Données chargées:', { 
+                    classes: classes, 
+                    activities: activities, 
+                    results: results, 
+                    studentAnswers: studentAnswers,
+                    lastAnswerTimestamps: lastAnswerTimestamps
+                });
             }
             
-            // Fonction pour charger les activités de l'élève - CORRIGÉE
+            // Fonction pour charger les activités de l'élève
             function loadStudentActivities() {
                 console.log('Chargement des activités pour:', currentStudent);
-                console.log('Classes disponibles:', classes);
-                console.log('Activités disponibles:', activities);
                 
                 activitiesContainer.innerHTML = '';
                 
@@ -768,7 +785,6 @@
                     return;
                 }
                 
-                // CORRECTION : Convertir le classId en nombre pour la comparaison
                 const studentClassId = parseInt(currentStudent.classId);
                 
                 // Filtrer les activités pour ne montrer que celles assignées à la classe de l'élève
@@ -778,7 +794,6 @@
                         return false;
                     }
                     
-                    // CORRECTION : Convertir les IDs de classe en nombres pour la comparaison
                     const assignedClasses = activity.classes.map(function(classId) {
                         return parseInt(classId);
                     });
@@ -852,30 +867,74 @@
                     ? studentAnswers[studentKey][activityKey] 
                     : {};
                 
-                // Initialiser l'état des questions
-                questionStates = {};
+                // Récupérer les timestamps des réponses incorrectes
+                const studentTimestampKey = studentKey + '_' + activityKey;
+                const answerTimestamps = lastAnswerTimestamps[studentTimestampKey] || {};
                 
                 currentActivity.questions.forEach(function(question, index) {
                     const previousAnswer = previousAnswers[question.id] || '';
                     const isCorrect = previousAnswer && previousAnswer.toLowerCase() === question.answer.toLowerCase();
+                    const lastAnswerTime = answerTimestamps[question.id] || 0;
+                    const currentTime = Date.now();
+                    const timeSinceLastAnswer = currentTime - lastAnswerTime;
+                    const delayMs = currentActivity.delay * 1000;
                     
-                    // Stocker l'état de la question
-                    questionStates[question.id] = {
-                        answered: !!previousAnswer,
-                        correct: isCorrect,
-                        locked: isCorrect, // Les questions correctes sont verrouillées
-                        canRetry: !isCorrect && !previousAnswer // Peut réessayer si pas encore répondu ou incorrect
-                    };
+                    // Déterminer si la question peut être réessayée
+                    const canRetry = !isCorrect && timeSinceLastAnswer >= delayMs;
+                    const waitingForRetry = !isCorrect && timeSinceLastAnswer < delayMs;
+                    const secondsLeft = waitingForRetry ? Math.ceil((delayMs - timeSinceLastAnswer) / 1000) : 0;
                     
                     const questionElement = document.createElement('div');
                     questionElement.classList.add('p-4', 'bg-gray-50', 'rounded-md', 'question-container');
                     questionElement.setAttribute('data-question-id', question.id);
                     
-                    // Appliquer la classe CSS appropriée
+                    // Appliquer la classe CSS pour les réponses correctes
                     if (isCorrect) {
-                        questionElement.classList.add('correct-answer');
-                    } else if (previousAnswer) {
-                        questionElement.classList.add('incorrect-answer');
+                        questionElement.classList.add('answered-correctly');
+                    }
+                    
+                    let answerInputHtml = '';
+                    let feedbackHtml = '';
+                    let retryInfoHtml = '';
+                    
+                    if (isCorrect) {
+                        // Question correcte : afficher seulement l'indicateur vert, pas la réponse
+                        answerInputHtml = `
+                            <div class="mt-2 p-2 bg-green-100 border border-green-300 rounded text-green-700">
+                                ✓ Réponse correcte
+                            </div>
+                        `;
+                    } else if (waitingForRetry) {
+                        // En attente de réessai : champ désactivé avec compte à rebours
+                        answerInputHtml = `
+                            <input type="text" 
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md student-answer" 
+                                   placeholder="Votre réponse" 
+                                   data-question-id="${question.id}"
+                                   value=""
+                                   disabled>
+                        `;
+                        retryInfoHtml = `
+                            <div class="retry-info mt-2 text-sm text-orange-600">
+                                Vous pourrez réessayer dans <span class="countdown-timer">${secondsLeft}</span> secondes
+                            </div>
+                        `;
+                    } else {
+                        // Peut être répondu (nouvelle ou peut réessayer)
+                        answerInputHtml = `
+                            <input type="text" 
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md student-answer" 
+                                   placeholder="Votre réponse" 
+                                   data-question-id="${question.id}"
+                                   value="${previousAnswer}">
+                        `;
+                        if (previousAnswer) {
+                            feedbackHtml = `
+                                <div class="feedback mt-2 text-sm text-red-600">
+                                    ✗ Réponse incorrecte
+                                </div>
+                            `;
+                        }
                     }
                     
                     questionElement.innerHTML = `
@@ -884,22 +943,9 @@
                             <h3 class="font-medium text-gray-800 ${isCorrect ? 'text-green-700' : ''}">Question ${index + 1}</h3>
                         </div>
                         <p class="text-gray-700 mb-3">${question.text}</p>
-                        <input type="text" 
-                               class="w-full px-3 py-2 border border-gray-300 rounded-md student-answer" 
-                               placeholder="Votre réponse" 
-                               data-question-id="${question.id}"
-                               value="${previousAnswer}"
-                               ${isCorrect ? 'disabled' : ''}>
-                        <div class="feedback mt-2 text-sm ${previousAnswer ? '' : 'hidden'}">
-                            ${previousAnswer ? (isCorrect ? 
-                                '<span class="text-green-600 font-bold">✓ Réponse correcte</span>' : 
-                                '<span class="text-red-600 font-bold">✗ Réponse incorrecte</span>') : ''}
-                        </div>
-                        ${!isCorrect && previousAnswer ? 
-                            `<div class="retry-info mt-2 text-sm text-orange-600 hidden">
-                                Vous pourrez réessayer dans <span class="countdown-timer">${currentActivity.delay}</span> secondes
-                            </div>` : ''
-                        }
+                        ${answerInputHtml}
+                        ${feedbackHtml}
+                        ${retryInfoHtml}
                     `;
                     
                     const answerInput = questionElement.querySelector('.student-answer');
@@ -907,45 +953,37 @@
                     const retryInfoEl = questionElement.querySelector('.retry-info');
                     const countdownEl = questionElement.querySelector('.countdown-timer');
                     
-                    // Si la réponse est correcte, styliser le champ
-                    if (isCorrect) {
-                        answerInput.classList.add('bg-green-100', 'border-green-400');
-                    } else if (previousAnswer) {
-                        answerInput.classList.add('bg-red-100', 'border-red-400');
-                        answerInput.disabled = true;
-                        
-                        // Vérifier si un timeout est déjà en cours pour cette question
-                        if (questionTimeouts[question.id]) {
-                            startCountdown(question.id, countdownEl, answerInput, feedbackEl, retryInfoEl);
-                        }
+                    // Si en attente de réessai, démarrer le compte à rebours
+                    if (waitingForRetry && countdownEl) {
+                        startCountdown(question.id, countdownEl, answerInput, feedbackEl, retryInfoEl, secondsLeft);
                     }
                     
-                    answerInput.addEventListener('blur', function() {
-                        if (!questionStates[question.id].locked) {
+                    // Ajouter les événements seulement si la question peut être répondue
+                    if (answerInput && !isCorrect && !waitingForRetry) {
+                        answerInput.addEventListener('blur', function() {
                             validateAnswer(question, answerInput, feedbackEl, retryInfoEl, countdownEl);
-                        }
-                    });
-                    
-                    answerInput.addEventListener('keypress', function(e) {
-                        if (e.key === 'Enter' && !questionStates[question.id].locked) {
-                            validateAnswer(question, answerInput, feedbackEl, retryInfoEl, countdownEl);
-                        }
-                    });
+                        });
+                        
+                        answerInput.addEventListener('keypress', function(e) {
+                            if (e.key === 'Enter') {
+                                validateAnswer(question, answerInput, feedbackEl, retryInfoEl, countdownEl);
+                            }
+                        });
+                    }
                     
                     questionsList.appendChild(questionElement);
                 });
             }
             
             // NOUVELLE FONCTION : Démarrer le compte à rebours
-            function startCountdown(questionId, countdownEl, inputElement, feedbackEl, retryInfoEl) {
-                let secondsLeft = currentActivity.delay;
+            function startCountdown(questionId, countdownEl, inputElement, feedbackEl, retryInfoEl, initialSeconds) {
+                let secondsLeft = initialSeconds;
                 
                 if (questionTimeouts[questionId]) {
                     clearInterval(questionTimeouts[questionId]);
                 }
                 
                 countdownEl.textContent = secondsLeft;
-                retryInfoEl.classList.remove('hidden');
                 
                 questionTimeouts[questionId] = setInterval(function() {
                     secondsLeft--;
@@ -955,14 +993,8 @@
                         clearInterval(questionTimeouts[questionId]);
                         delete questionTimeouts[questionId];
                         
-                        // Réactiver le champ de saisie
-                        inputElement.disabled = false;
-                        inputElement.classList.remove('bg-red-100', 'border-red-400');
-                        feedbackEl.classList.add('hidden');
-                        retryInfoEl.classList.add('hidden');
-                        
-                        // Mettre à jour l'état de la question
-                        questionStates[questionId].locked = false;
+                        // Recharger les questions pour mettre à jour l'interface
+                        loadActivityQuestions();
                     }
                 }, 1000);
             }
@@ -978,58 +1010,25 @@
                 // Sauvegarder la réponse de l'élève
                 saveStudentAnswer(question, userAnswer, isCorrect);
                 
-                if (isCorrect) {
-                    // Réponse correcte
-                    feedbackEl.innerHTML = '<span class="text-green-600 font-bold">✓ Réponse correcte</span>';
-                    feedbackEl.classList.remove('hidden');
-                    inputElement.disabled = true;
-                    inputElement.classList.add('bg-green-100', 'border-green-400');
+                // Sauvegarder le timestamp pour les réponses incorrectes
+                if (!isCorrect) {
+                    const studentKey = currentStudent.name + '_' + currentStudent.classId;
+                    const activityKey = currentActivity.id.toString();
+                    const studentTimestampKey = studentKey + '_' + activityKey;
                     
-                    // Mettre à jour l'apparence de la question
-                    const questionContainer = inputElement.closest('.question-container');
-                    questionContainer.classList.add('correct-answer');
-                    questionContainer.classList.remove('incorrect-answer');
-                    
-                    // Ajouter le checkmark visuel
-                    const questionTitle = questionContainer.querySelector('h3');
-                    if (!questionContainer.querySelector('.checkmark')) {
-                        const checkmark = document.createElement('span');
-                        checkmark.className = 'checkmark';
-                        checkmark.textContent = '✓';
-                        questionTitle.parentNode.insertBefore(checkmark, questionTitle);
+                    if (!lastAnswerTimestamps[studentTimestampKey]) {
+                        lastAnswerTimestamps[studentTimestampKey] = {};
                     }
-                    questionTitle.classList.add('text-green-700');
-                    
-                    // Mettre à jour l'état
-                    questionStates[question.id] = {
-                        answered: true,
-                        correct: true,
-                        locked: true,
-                        canRetry: false
-                    };
-                    
+                    lastAnswerTimestamps[studentTimestampKey][question.id] = Date.now();
+                    saveLastAnswerTimestamps();
+                }
+                
+                if (isCorrect) {
+                    // Réponse correcte : recharger pour afficher l'interface des réponses correctes
+                    loadActivityQuestions();
                 } else {
-                    // Réponse incorrecte
-                    feedbackEl.innerHTML = '<span class="text-red-600 font-bold">✗ Réponse incorrecte</span>';
-                    feedbackEl.classList.remove('hidden');
-                    inputElement.disabled = true;
-                    inputElement.classList.add('bg-red-100', 'border-red-400');
-                    
-                    // Mettre à jour l'apparence de la question
-                    const questionContainer = inputElement.closest('.question-container');
-                    questionContainer.classList.add('incorrect-answer');
-                    questionContainer.classList.remove('correct-answer');
-                    
-                    // Mettre à jour l'état
-                    questionStates[question.id] = {
-                        answered: true,
-                        correct: false,
-                        locked: true,
-                        canRetry: true
-                    };
-                    
-                    // Démarrer le compte à rebours pour la nouvelle tentative
-                    startCountdown(question.id, countdownEl, inputElement, feedbackEl, retryInfoEl);
+                    // Réponse incorrecte : recharger pour afficher le compte à rebours
+                    loadActivityQuestions();
                 }
                 
                 // Sauvegarder le résultat pour les statistiques
@@ -1070,7 +1069,7 @@
                     activityName: activity.name,
                     questionId: question.id,
                     questionText: question.text,
-                    studentAnswer: document.querySelector('[data-question-id="' + question.id + '"]').value,
+                    studentAnswer: document.querySelector('[data-question-id="' + question.id + '"]')?.value || '',
                     correctAnswer: question.answer,
                     isCorrect: isCorrect,
                     timestamp: new Date().toISOString()
@@ -1081,7 +1080,7 @@
                 updateResultsSummary();
             }
             
-            // Fonction backToActivities améliorée
+            // Fonction backToActivities
             backToActivities.addEventListener('click', function() {
                 console.log('Retour aux activités');
                 
@@ -1101,11 +1100,11 @@
                     loadStudentActivities();
                 }).catch(function(error) {
                     console.error('Erreur lors du rechargement des données:', error);
-                    // En cas d'erreur, essayer quand même de recharger les activités
                     loadStudentActivities();
                 });
             });
 
+            // [Le reste du code reste identique - j'ai gardé toutes les autres fonctions pour la gestion enseignante]
             // Show teacher platform
             showTeacherBtn.addEventListener('click', function() {
                 showTeacherPlatform();
@@ -1970,7 +1969,8 @@
                     classes: classes,
                     activities: activities,
                     results: results,
-                    studentAnswers: studentAnswers
+                    studentAnswers: studentAnswers,
+                    lastAnswerTimestamps: lastAnswerTimestamps
                 };
                 
                 const dataStr = JSON.stringify(data, null, 2);
